@@ -1,0 +1,578 @@
+name: Deploy Databricks Job - acc_pay_param
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+    
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y jq curl
+    
+    - name: Export notebooks and Python files
+      run: |
+        ORIGIN_HOST=${{ secrets.DATABRICKS_ORIGIN_HOST }}
+        ORIGIN_TOKEN=${{ secrets.DATABRICKS_ORIGIN_TOKEN }}
+        BASE_PATH="/Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap"
+        
+        # Create directory structure
+        mkdir -p files_to_deploy/environment_setup
+        mkdir -p files_to_deploy/etl/bronze
+        mkdir -p files_to_deploy/etl/silver
+        mkdir -p files_to_deploy/etl/gold
+        
+        echo "Exporting files from origin workspace..."
+        
+        # Export notebook (catalog_schemas_creation_nb)
+        echo "Exporting notebook: catalog_schemas_creation_nb"
+        curl -s -X GET \
+          -H "Authorization: Bearer $ORIGIN_TOKEN" \
+          "${ORIGIN_HOST}/api/2.0/workspace/export?path=${BASE_PATH}/environment_setup/catalog_schemas_creation_nb&format=SOURCE&direct_download=true" \
+          --output "files_to_deploy/environment_setup/catalog_schemas_creation_nb.py" || echo "Warning: Failed to export catalog_schemas_creation_nb"
+        
+        # Export Python files
+        declare -a PYTHON_FILES=(
+          "environment_setup/external_locations_creation.py"
+          "etl/staging_ingestion.py"
+          "etl/bronze/bronze__ap_invoices.py"
+          "etl/silver/silver__ap_invoices.py"
+          "etl/bronze/bronze__gl_control_totals.py"
+          "etl/silver/silver__gl_control_totals.py"
+          "etl/gold/gold__variance_ap_gl.py"
+          "etl/bronze/bronze__suppliers.py"
+          "etl/silver/silver__suppliers.py"
+          "etl/gold/gold__ap_inv_sup.py"
+        )
+        
+        for file_path in "${PYTHON_FILES[@]}"; do
+          echo "Exporting: $file_path"
+          curl -s -X GET \
+            -H "Authorization: Bearer $ORIGIN_TOKEN" \
+            "${ORIGIN_HOST}/api/2.0/workspace/export?path=${BASE_PATH}/${file_path}&format=SOURCE&direct_download=true" \
+            --output "files_to_deploy/${file_path}" || echo "Warning: Failed to export ${file_path}"
+        done
+        
+        echo "Export completed. Files ready for deployment."
+    
+    - name: Deploy files to Destination Workspace
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        DEST_BASE="/sd_databricks_proj_ap"
+        
+        echo "Creating directory structure in destination workspace..."
+        
+        # Create base directories
+        for dir in "" "/environment_setup" "/etl" "/etl/bronze" "/etl/silver" "/etl/gold"; do
+          echo "Creating directory: ${DEST_BASE}${dir}"
+          curl -s -X POST \
+            -H "Authorization: Bearer $DEST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"path\":\"${DEST_BASE}${dir}\"}" \
+            "${DEST_HOST}/api/2.0/workspace/mkdirs"
+        done
+        
+        echo "Deploying files to destination workspace..."
+        
+        # Deploy notebook
+        if [ -f "files_to_deploy/environment_setup/catalog_schemas_creation_nb.py" ]; then
+          echo "Importing notebook: catalog_schemas_creation_nb"
+          curl -s -X POST \
+            -H "Authorization: Bearer $DEST_TOKEN" \
+            -H "Content-Type: multipart/form-data" \
+            -F "path=${DEST_BASE}/environment_setup/catalog_schemas_creation_nb" \
+            -F "format=SOURCE" \
+            -F "language=PYTHON" \
+            -F "overwrite=true" \
+            -F "content=@files_to_deploy/environment_setup/catalog_schemas_creation_nb.py" \
+            "${DEST_HOST}/api/2.0/workspace/import"
+        fi
+        
+        # Deploy Python files
+        declare -a PYTHON_FILES=(
+          "environment_setup/external_locations_creation.py"
+          "etl/staging_ingestion.py"
+          "etl/bronze/bronze__ap_invoices.py"
+          "etl/silver/silver__ap_invoices.py"
+          "etl/bronze/bronze__gl_control_totals.py"
+          "etl/silver/silver__gl_control_totals.py"
+          "etl/gold/gold__variance_ap_gl.py"
+          "etl/bronze/bronze__suppliers.py"
+          "etl/silver/silver__suppliers.py"
+          "etl/gold/gold__ap_inv_sup.py"
+        )
+        
+        for file_path in "${PYTHON_FILES[@]}"; do
+          if [ -f "files_to_deploy/${file_path}" ]; then
+            echo "Importing: ${file_path}"
+            curl -s -X POST \
+              -H "Authorization: Bearer $DEST_TOKEN" \
+              -H "Content-Type: multipart/form-data" \
+              -F "path=${DEST_BASE}/${file_path}" \
+              -F "format=SOURCE" \
+              -F "language=PYTHON" \
+              -F "overwrite=true" \
+              -F "content=@files_to_deploy/${file_path}" \
+              "${DEST_HOST}/api/2.0/workspace/import"
+          fi
+        done
+        
+        echo "Deployment completed successfully."
+    
+    - name: Check and delete existing job
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        JOB_NAME="acc_pay_param"
+        
+        echo "Checking for existing job: $JOB_NAME"
+        
+        jobs_response=$(curl -s -X GET \
+          -H "Authorization: Bearer $DEST_TOKEN" \
+          "${DEST_HOST}/api/2.1/jobs/list")
+        
+        existing_job_id=$(echo "$jobs_response" | jq -r --arg name "$JOB_NAME" '.jobs[]? | select(.settings.name == $name) | .job_id')
+        
+        if [ -n "$existing_job_id" ] && [ "$existing_job_id" != "null" ]; then
+          echo "Found existing job with ID: $existing_job_id. Deleting..."
+          curl -s -X POST \
+            -H "Authorization: Bearer $DEST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\": $existing_job_id}" \
+            "${DEST_HOST}/api/2.1/jobs/delete"
+          echo "Job deleted successfully."
+        else
+          echo "No existing job found with name: $JOB_NAME"
+        fi
+    
+    - name: Get existing cluster ID
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        CLUSTER_NAME="${{ secrets.CLUSTER_NAME }}"
+        
+        echo "Looking for existing cluster: $CLUSTER_NAME"
+        
+        clusters_response=$(curl -s -X GET \
+          -H "Authorization: Bearer $DEST_TOKEN" \
+          "${DEST_HOST}/api/2.0/clusters/list")
+        
+        cluster_id=$(echo "$clusters_response" | jq -r --arg name "$CLUSTER_NAME" '.clusters[]? | select(.cluster_name == $name) | .cluster_id')
+        
+        if [ -n "$cluster_id" ] && [ "$cluster_id" != "null" ]; then
+          echo "Cluster found: $CLUSTER_NAME with ID: $cluster_id"
+          echo "CLUSTER_ID=$cluster_id" >> $GITHUB_ENV
+        else
+          echo "ERROR: Cluster not found: $CLUSTER_NAME"
+          echo "Available clusters:"
+          echo "$clusters_response" | jq -r '.clusters[]? | .cluster_name'
+          exit 1
+        fi
+    
+    - name: Create Databricks Job - acc_pay_param
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        DEST_BASE="/Workspace/sd_databricks_proj_ap"
+        CLUSTER_ID="${{ env.CLUSTER_ID }}"
+        
+        echo "Creating job: acc_pay_param with cluster ID: $CLUSTER_ID"
+        
+        # Create job configuration JSON
+        cat > job_config.json << 'EOF'
+        {
+          "name": "acc_pay_param",
+          "format": "MULTI_TASK",
+          "tasks": [
+            {
+              "task_key": "catalog_schemas_creation",
+              "description": "Create catalog and schemas",
+              "notebook_task": {
+                "notebook_path": "/Workspace/sd_databricks_proj_ap/environment_setup/catalog_schemas_creation_nb",
+                "source": "WORKSPACE",
+                "base_parameters": {
+                  "catalog_name": "ap"
+                }
+              },
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 1
+            },
+            {
+              "task_key": "external_locations_creation",
+              "description": "Create external locations",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/environment_setup/external_locations_creation.py"
+              },
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 1
+            },
+            {
+              "task_key": "stage",
+              "description": "Staging data ingestion",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/staging_ingestion.py"
+              },
+              "depends_on": [
+                {"task_key": "catalog_schemas_creation"},
+                {"task_key": "external_locations_creation"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "bronze__ap_invoices",
+              "description": "Bronze layer - AP Invoices",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/bronze/bronze__ap_invoices.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "stage"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "silver__ap_invoices",
+              "description": "Silver layer - AP Invoices",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/silver/silver__ap_invoices.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "bronze__ap_invoices"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "bronze__gl_control_totals",
+              "description": "Bronze layer - GL Control Totals",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/bronze/bronze__gl_control_totals.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "stage"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "silver__gl_control_totals",
+              "description": "Silver layer - GL Control Totals",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/silver/silver__gl_control_totals.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "bronze__gl_control_totals"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "gold__variance_ap_gl",
+              "description": "Gold layer - Variance AP vs GL",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/gold/gold__variance_ap_gl.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "silver__ap_invoices"},
+                {"task_key": "silver__gl_control_totals"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "bronze__suppliers",
+              "description": "Bronze layer - Suppliers",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/bronze/bronze__suppliers.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "stage"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "silver__suppliers",
+              "description": "Silver layer - Suppliers",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/silver/silver__suppliers.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "bronze__suppliers"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            },
+            {
+              "task_key": "gold__ap_inv_sup",
+              "description": "Gold layer - AP Invoices with Suppliers",
+              "spark_python_task": {
+                "python_file": "/Workspace/sd_databricks_proj_ap/etl/gold/gold__ap_inv_sup.py",
+                "parameters": [
+                  "--catalog_name",
+                  "{{job.parameters.catalog_name}}"
+                ]
+              },
+              "depends_on": [
+                {"task_key": "silver__ap_invoices"},
+                {"task_key": "silver__suppliers"}
+              ],
+              "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
+              "timeout_seconds": 3600,
+              "max_retries": 2
+            }
+          ],
+          "parameters": [
+            {
+              "name": "catalog_name",
+              "default": "ap_dev"
+            }
+          ],
+          "queue": {
+            "enabled": true
+          },
+          "email_notifications": {
+            "on_failure": [],
+            "on_success": [],
+            "no_alert_for_skipped_runs": false
+          },
+          "timeout_seconds": 7200,
+          "max_concurrent_runs": 1,
+          "tags": {
+            "environment": "production",
+            "created_by": "github_actions",
+            "project": "accounts_payable"
+          }
+        }
+        EOF
+        
+        # Replace cluster ID placeholder
+        sed -i "s/CLUSTER_ID_PLACEHOLDER/$CLUSTER_ID/g" job_config.json
+        
+        # Create the job
+        create_response=$(curl -s -X POST \
+          -H "Authorization: Bearer $DEST_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d @job_config.json \
+          "${DEST_HOST}/api/2.1/jobs/create")
+        
+        echo "Job creation response: $create_response"
+        
+        job_id=$(echo "$create_response" | jq -r '.job_id')
+        
+        if [ -n "$job_id" ] && [ "$job_id" != "null" ]; then
+          echo "Job 'acc_pay_param' created successfully with ID: $job_id"
+          echo "JOB_ID=$job_id" >> $GITHUB_ENV
+          
+          # Get job details
+          job_details=$(curl -s -X GET \
+            -H "Authorization: Bearer $DEST_TOKEN" \
+            "${DEST_HOST}/api/2.1/jobs/get?job_id=$job_id")
+          
+          echo "Job details:"
+          echo "$job_details" | jq '.settings | {name, task_count: (.tasks | length), parameters}'
+        else
+          echo "ERROR: Failed to create job"
+          echo "Full response: $create_response"
+          exit 1
+        fi
+    
+    - name: Validate Job Configuration
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        JOB_ID="${{ env.JOB_ID }}"
+        
+        echo "Validating job configuration..."
+        
+        job_details=$(curl -s -X GET \
+          -H "Authorization: Bearer $DEST_TOKEN" \
+          "${DEST_HOST}/api/2.1/jobs/get?job_id=$JOB_ID")
+        
+        echo "Job Summary:"
+        echo "Name: $(echo "$job_details" | jq -r '.settings.name')"
+        echo "Number of tasks: $(echo "$job_details" | jq '.settings.tasks | length')"
+        echo ""
+        echo "Tasks configured:"
+        echo "$job_details" | jq -r '.settings.tasks[] | "- " + .task_key + " -> " + (if .notebook_task then .notebook_task.notebook_path else .spark_python_task.python_file end)'
+        echo ""
+        echo "Parameters:"
+        echo "$job_details" | jq -r '.settings.parameters[]? | "- " + .name + " (default: " + .default + ")"'
+        echo ""
+        echo "Cluster configured:"
+        echo "Cluster ID: $(echo "$job_details" | jq -r '.settings.tasks[0].existing_cluster_id')"
+    
+    - name: Execute Job (Optional)
+      if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-job]')
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        JOB_ID="${{ env.JOB_ID }}"
+        
+        echo "Executing job: acc_pay_param (ID: $JOB_ID)"
+        
+        run_response=$(curl -s -X POST \
+          -H "Authorization: Bearer $DEST_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{\"job_id\": $JOB_ID}" \
+          "${DEST_HOST}/api/2.1/jobs/run-now")
+        
+        run_id=$(echo "$run_response" | jq -r '.run_id')
+        
+        if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+          echo "Job executed successfully!"
+          echo "Run ID: $run_id"
+          echo "RUN_ID=$run_id" >> $GITHUB_ENV
+          echo "Job URL: ${DEST_HOST}/jobs/$JOB_ID/runs/$run_id"
+        else
+          echo "ERROR: Failed to execute job"
+          echo "Response: $run_response"
+          exit 1
+        fi
+    
+    - name: Monitor Job Execution (Optional)
+      if: (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-job]')) && env.RUN_ID != ''
+      run: |
+        DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
+        DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
+        RUN_ID="${{ env.RUN_ID }}"
+        JOB_ID="${{ env.JOB_ID }}"
+        
+        echo "Monitoring job execution..."
+        echo "Run ID: $RUN_ID"
+        
+        max_wait_time=1800  # 30 minutes
+        wait_time=0
+        check_interval=30
+        
+        while [ $wait_time -lt $max_wait_time ]; do
+          run_status=$(curl -s -X GET \
+            -H "Authorization: Bearer $DEST_TOKEN" \
+            "${DEST_HOST}/api/2.1/jobs/runs/get?run_id=$RUN_ID")
+          
+          state=$(echo "$run_status" | jq -r '.state.life_cycle_state')
+          result_state=$(echo "$run_status" | jq -r '.state.result_state // "RUNNING"')
+          
+          echo "Current state: $state ($result_state) - Time elapsed: ${wait_time}s"
+          
+          # Show task progress
+          echo "$run_status" | jq -r '.tasks[]? | "  - " + .task_key + ": " + .state.life_cycle_state + " (" + (.state.result_state // "RUNNING") + ")"'
+          
+          case "$state" in
+            "TERMINATED")
+              if [ "$result_state" = "SUCCESS" ]; then
+                echo "Job completed successfully!"
+                echo ""
+                echo "Execution summary:"
+                echo "$run_status" | jq -r '.tasks[]? | "✓ " + .task_key + " -> " + (.state.result_state // "SUCCESS")'
+                
+                start_time=$(echo "$run_status" | jq -r '.start_time')
+                end_time=$(echo "$run_status" | jq -r '.end_time')
+                if [ "$start_time" != "null" ] && [ "$end_time" != "null" ]; then
+                  duration=$((($end_time - $start_time) / 1000))
+                  echo "Total duration: ${duration} seconds"
+                fi
+                
+                exit 0
+              else
+                echo "Job terminated with errors: $result_state"
+                echo "Task details:"
+                echo "$run_status" | jq -r '.tasks[]? | "✗ " + .task_key + ": " + (.state.result_state // "UNKNOWN")'
+                exit 1
+              fi
+              ;;
+            "INTERNAL_ERROR"|"SKIPPED")
+              echo "Job failed with state: $state"
+              exit 1
+              ;;
+            *)
+              echo "Job still running..."
+              ;;
+          esac
+          
+          sleep $check_interval
+          wait_time=$((wait_time + check_interval))
+        done
+        
+        echo "Timeout: Job still executing after $max_wait_time seconds"
+        echo "Check status at: ${DEST_HOST}/jobs/$JOB_ID/runs/$RUN_ID"
+        echo "Job will continue running in Databricks"
+        exit 0
+    
+    - name: Clean up
+      if: always()
+      run: |
+        rm -rf files_to_deploy
+        rm -f job_config.json
+    
+    - name: Deployment Summary
+      if: success()
+      run: |
+        echo "=========================================="
+        echo "Deployment completed successfully!"
+        echo "=========================================="
+        echo ""
+        echo "Job Details:"
+        echo "- Name: acc_pay_param"
+        echo "- Tasks: 11 tasks configured"
+        echo "- Parameters: catalog_name (default: ap_dev)"
+        echo ""
+        echo "Task Structure:"
+        echo "  1. catalog_schemas_creation (setup)"
+        echo "  2. external_locations_creation (setup)"
+        echo "  3. stage (ingestion)"
+        echo "  4-5. bronze/silver__ap_invoices"
+        echo "  6-7. bronze/silver__gl_control_totals"
+        echo "  8-9. bronze/silver__suppliers"
+        echo "  10. gold__variance_ap_gl"
+        echo "  11. gold__ap_inv_sup"
+        echo ""
+        echo "Access your Databricks workspace to view the deployed job"
+        echo "=========================================="
