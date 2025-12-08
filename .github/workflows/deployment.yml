@@ -556,7 +556,7 @@ jobs:
       if: success()
       run: |
         echo "=========================================="
-        echo "Deployment completed successfully!"
+        echo "Deployment completed successfully"
         echo "=========================================="
         echo ""
         echo "Job Details:"
