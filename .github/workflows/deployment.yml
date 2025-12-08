@@ -1,10 +1,16 @@
-name: Deploy Databricks Job - acc_pay_param
+name: Deploy Databricks Job - acc_pay_param (Production)
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      execute_job:
+        description: 'Execute job after deployment'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   deploy:
@@ -62,13 +68,13 @@ jobs:
         
         echo "Export completed. Files ready for deployment."
     
-    - name: Deploy files to Destination Workspace
+    - name: Deploy files to Production Workspace
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
         DEST_BASE="/sd_databricks_proj_ap"
         
-        echo "Creating directory structure in destination workspace..."
+        echo "Deploying to production workspace..."
         
         # Create base directories
         for dir in "" "/environment_setup" "/etl" "/etl/bronze" "/etl/silver" "/etl/gold"; do
@@ -157,7 +163,7 @@ jobs:
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
-        CLUSTER_NAME="${{ secrets.CLUSTER_NAME }}"
+        CLUSTER_NAME=${{ secrets.CLUSTER_NAME }}
         
         echo "Looking for existing cluster: $CLUSTER_NAME"
         
@@ -185,6 +191,7 @@ jobs:
         CLUSTER_ID="${{ env.CLUSTER_ID }}"
         
         echo "Creating job: acc_pay_param with cluster ID: $CLUSTER_ID"
+        echo "Catalog: ap_prd"
         
         # Create job configuration JSON
         cat > job_config.json << 'EOF'
@@ -199,7 +206,7 @@ jobs:
                 "notebook_path": "/Workspace/sd_databricks_proj_ap/environment_setup/catalog_schemas_creation_nb",
                 "source": "WORKSPACE",
                 "base_parameters": {
-                  "catalog_name": "ap"
+                  "catalog_name": "ap_prd"
                 }
               },
               "existing_cluster_id": "CLUSTER_ID_PLACEHOLDER",
@@ -372,7 +379,7 @@ jobs:
           "parameters": [
             {
               "name": "catalog_name",
-              "default": "ap_dev"
+              "default": "ap_prd"
             }
           ],
           "queue": {
@@ -387,6 +394,7 @@ jobs:
           "max_concurrent_runs": 1,
           "tags": {
             "environment": "production",
+            "catalog": "ap_prd",
             "created_by": "github_actions",
             "project": "accounts_payable"
           }
@@ -417,7 +425,7 @@ jobs:
             "${DEST_HOST}/api/2.1/jobs/get?job_id=$job_id")
           
           echo "Job details:"
-          echo "$job_details" | jq '.settings | {name, task_count: (.tasks | length), parameters}'
+          echo "$job_details" | jq '.settings | {name, task_count: (.tasks | length), parameters, tags}'
         else
           echo "ERROR: Failed to create job"
           echo "Full response: $create_response"
@@ -436,8 +444,11 @@ jobs:
           -H "Authorization: Bearer $DEST_TOKEN" \
           "${DEST_HOST}/api/2.1/jobs/get?job_id=$JOB_ID")
         
-        echo "Job Summary:"
+        echo "=========================================="
+        echo "Job Summary"
+        echo "=========================================="
         echo "Name: $(echo "$job_details" | jq -r '.settings.name')"
+        echo "Catalog: ap_prd"
         echo "Number of tasks: $(echo "$job_details" | jq '.settings.tasks | length')"
         echo ""
         echo "Tasks configured:"
@@ -448,9 +459,10 @@ jobs:
         echo ""
         echo "Cluster configured:"
         echo "Cluster ID: $(echo "$job_details" | jq -r '.settings.tasks[0].existing_cluster_id')"
+        echo "=========================================="
     
-    - name: Execute Job (Optional)
-      if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-job]')
+    - name: Execute Job
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.execute_job == 'true'
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
@@ -477,8 +489,8 @@ jobs:
           exit 1
         fi
     
-    - name: Monitor Job Execution (Optional)
-      if: (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-job]')) && env.RUN_ID != ''
+    - name: Monitor Job Execution
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.execute_job == 'true' && env.RUN_ID != ''
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
@@ -508,7 +520,9 @@ jobs:
           case "$state" in
             "TERMINATED")
               if [ "$result_state" = "SUCCESS" ]; then
+                echo "=========================================="
                 echo "Job completed successfully!"
+                echo "=========================================="
                 echo ""
                 echo "Execution summary:"
                 echo "$run_status" | jq -r '.tasks[]? | "✓ " + .task_key + " -> " + (.state.result_state // "SUCCESS")'
@@ -517,12 +531,15 @@ jobs:
                 end_time=$(echo "$run_status" | jq -r '.end_time')
                 if [ "$start_time" != "null" ] && [ "$end_time" != "null" ]; then
                   duration=$((($end_time - $start_time) / 1000))
+                  echo ""
                   echo "Total duration: ${duration} seconds"
                 fi
                 
                 exit 0
               else
+                echo "=========================================="
                 echo "Job terminated with errors: $result_state"
+                echo "=========================================="
                 echo "Task details:"
                 echo "$run_status" | jq -r '.tasks[]? | "✗ " + .task_key + ": " + (.state.result_state // "UNKNOWN")'
                 exit 1
@@ -556,13 +573,15 @@ jobs:
       if: success()
       run: |
         echo "=========================================="
-        echo "Deployment completed successfully"
+        echo "Deployment completed successfully!"
         echo "=========================================="
         echo ""
         echo "Job Details:"
         echo "- Name: acc_pay_param"
+        echo "- Environment: Production"
+        echo "- Catalog: ap_prd"
         echo "- Tasks: 11 tasks configured"
-        echo "- Parameters: catalog_name (default: ap_dev)"
+        echo "- Parameters: catalog_name (default: ap_prd)"
         echo ""
         echo "Task Structure:"
         echo "  1. catalog_schemas_creation (setup)"
