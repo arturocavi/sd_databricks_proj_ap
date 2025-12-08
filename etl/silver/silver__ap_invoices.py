@@ -27,13 +27,20 @@ from pyspark.sql.types import BooleanType, IntegerType, DateType
 from pyspark.sql.window import Window
 from datetime import datetime
 import re
+import argparse
 
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-INPUT_TABLE = "ap.bronze.ap_invoices"
-OUTPUT_TABLE = "ap.silver.ap_invoices"
+# Get parameter value for catalog name (target workspace)
+parser = argparse.ArgumentParser()
+parser.add_argument('--catalog_name', type=str, required=True)
+args = parser.parse_args()
+CATALOG = args.catalog_name
+
+INPUT_TABLE = f"{CATALOG}.bronze.ap_invoices"
+OUTPUT_TABLE = f"{CATALOG}.silver.ap_invoices"
 DATE_COLS = ["invoice_date", "due_date", "paid_date"]
 TEXT_FIELDS = ["category"]
 ID_FIELDS = ["invoice_id", "cost_center", "poid"]

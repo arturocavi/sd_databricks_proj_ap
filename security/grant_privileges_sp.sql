@@ -28,10 +28,19 @@ TO `arturocvsdpf@outlook.com`;
 
 
 -- -----------------------------------------------------------
--- Grant READ FILES on Specific External Location
+-- Grant READ & WRITE FILES on Specific External Location
 -- -----------------------------------------------------------
+-- Grant READ FILES on External Location 'source_ext_loc'
+GRANT READ FILES
+ON EXTERNAL LOCATION `source_ext_loc`
+TO `arturocvsdpf@outlook.com`;
+
 -- Grant READ FILES on External Location 'bronze_ext_loc'
 GRANT READ FILES
 ON EXTERNAL LOCATION `bronze_ext_loc`
 TO `arturocvsdpf@outlook.com`;
 
+-- Grant WRITE FILES on External Location 'bronze_ext_loc'
+GRANT WRITE FILES
+ON EXTERNAL LOCATION `bronze_ext_loc`
+TO `arturocvsdpf@outlook.com`;

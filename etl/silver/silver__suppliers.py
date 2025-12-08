@@ -9,13 +9,20 @@ This script performs data transformation on the 'ap.bronze.suppliers' table.
 # DEPENDENCIES
 # ============================================================================
 from pyspark.sql.functions import *
+import argparse
 
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-INPUT_TABLE = "ap.bronze.suppliers"
-OUTPUT_TABLE = "ap.silver.suppliers"
+# Get parameter value for catalog name (target workspace)
+parser = argparse.ArgumentParser()
+parser.add_argument('--catalog_name', type=str, required=True)
+args = parser.parse_args()
+CATALOG = args.catalog_name
+
+INPUT_TABLE = f"{CATALOG}.bronze.suppliers"
+OUTPUT_TABLE = f"{CATALOG}.silver.suppliers"
 TEXT_FIELDS = ["supplier"]
 
 

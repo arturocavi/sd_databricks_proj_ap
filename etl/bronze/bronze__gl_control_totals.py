@@ -8,14 +8,21 @@ Bronze layer - GL Control Totals
 # DEPENDENCIES
 # ============================================================================
 from pyspark.sql.functions import current_timestamp, to_timestamp_ntz 
+import argparse
+
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
+# Get parameter value for catalog name (target workspace)
+parser = argparse.ArgumentParser()
+parser.add_argument('--catalog_name', type=str, required=True)
+args = parser.parse_args()
+CATALOG = args.catalog_name
+
 # Storage configuration
 STORAGE_ACCOUNT = "sd0212"
 CONTAINER = "bronze"
-CATALOG = "ap"
 SCHEMA = "bronze"
 TABLE = "gl_control_totals"
 
