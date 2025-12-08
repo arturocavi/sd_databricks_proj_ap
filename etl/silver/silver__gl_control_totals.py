@@ -9,13 +9,20 @@ This script performs data transformation on the 'ap.bronze.gl_control_totals' ta
 # DEPENDENCIES
 # ============================================================================
 from pyspark.sql.functions import *
+import argparse
 
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-INPUT_TABLE = "ap.bronze.gl_control_totals"
-OUTPUT_TABLE = "ap.silver.gl_control_totals"
+# Get parameter value for catalog name (target workspace)
+parser = argparse.ArgumentParser()
+parser.add_argument('--catalog_name', type=str, required=True)
+args = parser.parse_args()
+CATALOG = args.catalog_name
+
+INPUT_TABLE = f"{CATALOG}.bronze.gl_control_totals"
+OUTPUT_TABLE = f"{CATALOG}.silver.gl_control_totals"
 
 
 # ============================================================================
