@@ -198,12 +198,12 @@ jobs:
             -F "language=PYTHON" \
             -F "overwrite=true" \
             -F "content=@files_to_deploy/environment_setup/catalog_schemas_creation_nb.py" \
-            "${DEST_HOST}/api/2.0/workspace/import")
+            "${DEST_HOST}/api/2.0/workspace/import" || true)
           
           http_code=$(echo "$import_response" | tail -n1)
           response_body=$(echo "$import_response" | sed '$d')
           
-          if [ "$http_code" -eq 200 ]; then
+          if [ "$http_code" = "200" ]; then
             echo "✓ Notebook imported successfully"
           else
             echo "✗ Failed to import notebook (HTTP $http_code)"
@@ -245,21 +245,21 @@ jobs:
               -F "language=PYTHON" \
               -F "overwrite=true" \
               -F "content=@files_to_deploy/${file_path}" \
-              "${DEST_HOST}/api/2.0/workspace/import")
+              "${DEST_HOST}/api/2.0/workspace/import" || true)
             
             http_code=$(echo "$import_response" | tail -n1)
             response_body=$(echo "$import_response" | sed '$d')
             
-            if [ "$http_code" -eq 200 ]; then
+            if [ "$http_code" = "200" ]; then
               echo "✓ Successfully imported"
-              ((success_count++))
+              success_count=$((success_count + 1))
             else
               echo "✗ Failed (HTTP $http_code): $response_body"
-              ((fail_count++))
+              fail_count=$((fail_count + 1))
             fi
           else
             echo "⚠ File not found: files_to_deploy/${file_path}"
-            ((fail_count++))
+            fail_count=$((fail_count + 1))
           fi
           echo ""
         done
@@ -271,7 +271,10 @@ jobs:
         echo "Failed: $fail_count files"
         echo "=========================================="
         
-        if [ $fail_count -gt 0 ]; then
+        if [ $fail_count -gt 5 ]; then
+          echo "✗ Too many files failed to import. Exiting..."
+          exit 1
+        elif [ $fail_count -gt 0 ]; then
           echo "⚠ Some files failed to import, but continuing..."
         fi
         
