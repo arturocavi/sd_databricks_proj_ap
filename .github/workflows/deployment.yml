@@ -23,6 +23,84 @@ jobs:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y jq curl
     
+    - name: Validate Secrets and Connection
+      run: |
+        echo "=========================================="
+        echo "Validating Configuration"
+        echo "=========================================="
+        
+        # Check if secrets are set
+        if [ -z "${{ secrets.DATABRICKS_ORIGIN_HOST }}" ]; then
+          echo "ERROR: DATABRICKS_ORIGIN_HOST secret is not set"
+          exit 1
+        fi
+        
+        if [ -z "${{ secrets.DATABRICKS_ORIGIN_TOKEN }}" ]; then
+          echo "ERROR: DATABRICKS_ORIGIN_TOKEN secret is not set"
+          exit 1
+        fi
+        
+        if [ -z "${{ secrets.DATABRICKS_DEST_HOST }}" ]; then
+          echo "ERROR: DATABRICKS_DEST_HOST secret is not set"
+          exit 1
+        fi
+        
+        if [ -z "${{ secrets.DATABRICKS_DEST_TOKEN }}" ]; then
+          echo "ERROR: DATABRICKS_DEST_TOKEN secret is not set"
+          exit 1
+        fi
+        
+        if [ -z "${{ secrets.CLUSTER_NAME }}" ]; then
+          echo "ERROR: CLUSTER_NAME secret is not set"
+          exit 1
+        fi
+        
+        echo "✓ All required secrets are configured"
+        echo ""
+        echo "Origin Host: ${{ secrets.DATABRICKS_ORIGIN_HOST }}"
+        echo "Destination Host: ${{ secrets.DATABRICKS_DEST_HOST }}"
+        echo "Cluster Name: ${{ secrets.CLUSTER_NAME }}"
+        echo ""
+        
+        # Test connection to origin workspace
+        echo "Testing connection to origin workspace..."
+        origin_response=$(curl -s -w "\n%{http_code}" -X GET \
+          -H "Authorization: Bearer ${{ secrets.DATABRICKS_ORIGIN_TOKEN }}" \
+          "${{ secrets.DATABRICKS_ORIGIN_HOST }}/api/2.0/clusters/list")
+        
+        origin_http_code=$(echo "$origin_response" | tail -n1)
+        origin_body=$(echo "$origin_response" | sed '$d')
+        
+        if [ "$origin_http_code" -eq 200 ]; then
+          echo "✓ Successfully connected to origin workspace"
+        else
+          echo "✗ Failed to connect to origin workspace (HTTP $origin_http_code)"
+          echo "Response: $origin_body"
+          exit 1
+        fi
+        
+        # Test connection to destination workspace
+        echo "Testing connection to destination workspace..."
+        dest_response=$(curl -s -w "\n%{http_code}" -X GET \
+          -H "Authorization: Bearer ${{ secrets.DATABRICKS_DEST_TOKEN }}" \
+          "${{ secrets.DATABRICKS_DEST_HOST }}/api/2.0/clusters/list")
+        
+        dest_http_code=$(echo "$dest_response" | tail -n1)
+        dest_body=$(echo "$dest_response" | sed '$d')
+        
+        if [ "$dest_http_code" -eq 200 ]; then
+          echo "✓ Successfully connected to destination workspace"
+        else
+          echo "✗ Failed to connect to destination workspace (HTTP $dest_http_code)"
+          echo "Response: $dest_body"
+          exit 1
+        fi
+        
+        echo ""
+        echo "=========================================="
+        echo "All validations passed!"
+        echo "=========================================="
+    
     - name: Export notebooks and Python files
       run: |
         ORIGIN_HOST=${{ secrets.DATABRICKS_ORIGIN_HOST }}
@@ -72,26 +150,47 @@ jobs:
       run: |
         DEST_HOST=${{ secrets.DATABRICKS_DEST_HOST }}
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
-        DEST_BASE="/sd_databricks_proj_ap"
+        DEST_BASE="/Workspace/sd_databricks_proj_ap"
         
+        echo "=========================================="
         echo "Deploying to production workspace..."
+        echo "Target: $DEST_HOST"
+        echo "Base path: $DEST_BASE"
+        echo "=========================================="
         
-        # Create base directories
+        # Create base directories with error checking
         for dir in "" "/environment_setup" "/etl" "/etl/bronze" "/etl/silver" "/etl/gold"; do
+          echo ""
           echo "Creating directory: ${DEST_BASE}${dir}"
-          curl -s -X POST \
+          
+          mkdir_response=$(curl -s -w "\n%{http_code}" -X POST \
             -H "Authorization: Bearer $DEST_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"path\":\"${DEST_BASE}${dir}\"}" \
-            "${DEST_HOST}/api/2.0/workspace/mkdirs"
+            "${DEST_HOST}/api/2.0/workspace/mkdirs")
+          
+          http_code=$(echo "$mkdir_response" | tail -n1)
+          response_body=$(echo "$mkdir_response" | sed '$d')
+          
+          if [ "$http_code" -eq 200 ]; then
+            echo "✓ Directory created successfully"
+          else
+            echo "⚠ Response (HTTP $http_code): $response_body"
+            # Continue even if directory already exists
+          fi
         done
         
-        echo "Deploying files to destination workspace..."
+        echo ""
+        echo "=========================================="
         
-        # Deploy notebook
+        echo "Deploying files to destination workspace..."
+        echo ""
+        
+        # Deploy notebook with detailed logging
         if [ -f "files_to_deploy/environment_setup/catalog_schemas_creation_nb.py" ]; then
           echo "Importing notebook: catalog_schemas_creation_nb"
-          curl -s -X POST \
+          
+          import_response=$(curl -s -w "\n%{http_code}" -X POST \
             -H "Authorization: Bearer $DEST_TOKEN" \
             -H "Content-Type: multipart/form-data" \
             -F "path=${DEST_BASE}/environment_setup/catalog_schemas_creation_nb" \
@@ -99,10 +198,25 @@ jobs:
             -F "language=PYTHON" \
             -F "overwrite=true" \
             -F "content=@files_to_deploy/environment_setup/catalog_schemas_creation_nb.py" \
-            "${DEST_HOST}/api/2.0/workspace/import"
+            "${DEST_HOST}/api/2.0/workspace/import")
+          
+          http_code=$(echo "$import_response" | tail -n1)
+          response_body=$(echo "$import_response" | sed '$d')
+          
+          if [ "$http_code" -eq 200 ]; then
+            echo "✓ Notebook imported successfully"
+          else
+            echo "✗ Failed to import notebook (HTTP $http_code)"
+            echo "Response: $response_body"
+            exit 1
+          fi
+        else
+          echo "⚠ Notebook file not found: files_to_deploy/environment_setup/catalog_schemas_creation_nb.py"
         fi
         
-        # Deploy Python files
+        echo ""
+        
+        # Deploy Python files with detailed logging
         declare -a PYTHON_FILES=(
           "environment_setup/external_locations_creation.py"
           "etl/staging_ingestion.py"
@@ -116,10 +230,14 @@ jobs:
           "etl/gold/gold__ap_inv_sup.py"
         )
         
+        success_count=0
+        fail_count=0
+        
         for file_path in "${PYTHON_FILES[@]}"; do
           if [ -f "files_to_deploy/${file_path}" ]; then
             echo "Importing: ${file_path}"
-            curl -s -X POST \
+            
+            import_response=$(curl -s -w "\n%{http_code}" -X POST \
               -H "Authorization: Bearer $DEST_TOKEN" \
               -H "Content-Type: multipart/form-data" \
               -F "path=${DEST_BASE}/${file_path}" \
@@ -127,11 +245,38 @@ jobs:
               -F "language=PYTHON" \
               -F "overwrite=true" \
               -F "content=@files_to_deploy/${file_path}" \
-              "${DEST_HOST}/api/2.0/workspace/import"
+              "${DEST_HOST}/api/2.0/workspace/import")
+            
+            http_code=$(echo "$import_response" | tail -n1)
+            response_body=$(echo "$import_response" | sed '$d')
+            
+            if [ "$http_code" -eq 200 ]; then
+              echo "✓ Successfully imported"
+              ((success_count++))
+            else
+              echo "✗ Failed (HTTP $http_code): $response_body"
+              ((fail_count++))
+            fi
+          else
+            echo "⚠ File not found: files_to_deploy/${file_path}"
+            ((fail_count++))
           fi
+          echo ""
         done
         
-        echo "Deployment completed successfully."
+        echo "=========================================="
+        echo "Deployment Summary"
+        echo "=========================================="
+        echo "Successfully imported: $success_count files"
+        echo "Failed: $fail_count files"
+        echo "=========================================="
+        
+        if [ $fail_count -gt 0 ]; then
+          echo "⚠ Some files failed to import, but continuing..."
+        fi
+        
+        echo ""
+        echo "Deployment to production completed."
     
     - name: Check and delete existing job
       run: |
@@ -139,25 +284,50 @@ jobs:
         DEST_TOKEN=${{ secrets.DATABRICKS_DEST_TOKEN }}
         JOB_NAME="acc_pay_param"
         
+        echo "=========================================="
         echo "Checking for existing job: $JOB_NAME"
+        echo "=========================================="
         
-        jobs_response=$(curl -s -X GET \
+        jobs_response=$(curl -s -w "\n%{http_code}" -X GET \
           -H "Authorization: Bearer $DEST_TOKEN" \
           "${DEST_HOST}/api/2.1/jobs/list")
         
-        existing_job_id=$(echo "$jobs_response" | jq -r --arg name "$JOB_NAME" '.jobs[]? | select(.settings.name == $name) | .job_id')
+        http_code=$(echo "$jobs_response" | tail -n1)
+        response_body=$(echo "$jobs_response" | sed '$d')
+        
+        if [ "$http_code" -ne 200 ]; then
+          echo "✗ Failed to list jobs (HTTP $http_code)"
+          echo "Response: $response_body"
+          exit 1
+        fi
+        
+        echo "✓ Successfully retrieved jobs list"
+        
+        existing_job_id=$(echo "$response_body" | jq -r --arg name "$JOB_NAME" '.jobs[]? | select(.settings.name == $name) | .job_id')
         
         if [ -n "$existing_job_id" ] && [ "$existing_job_id" != "null" ]; then
           echo "Found existing job with ID: $existing_job_id. Deleting..."
-          curl -s -X POST \
+          
+          delete_response=$(curl -s -w "\n%{http_code}" -X POST \
             -H "Authorization: Bearer $DEST_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"job_id\": $existing_job_id}" \
-            "${DEST_HOST}/api/2.1/jobs/delete"
-          echo "Job deleted successfully."
+            "${DEST_HOST}/api/2.1/jobs/delete")
+          
+          delete_http_code=$(echo "$delete_response" | tail -n1)
+          
+          if [ "$delete_http_code" -eq 200 ]; then
+            echo "✓ Job deleted successfully"
+          else
+            echo "✗ Failed to delete job (HTTP $delete_http_code)"
+            echo "Response: $(echo "$delete_response" | sed '$d')"
+            exit 1
+          fi
         else
           echo "No existing job found with name: $JOB_NAME"
         fi
+        
+        echo "=========================================="
     
     - name: Get existing cluster ID
       run: |
