@@ -113,6 +113,9 @@ In the task parameter of each python file task you need to write:
 ```json
 ["--catalog_name","{{job.parameters.catalog_name}}"]
 ```
+<img width="1619" height="652" alt="parameter_config" src="https://github.com/user-attachments/assets/ee46eb07-3a04-40c2-aa44-783ce269cb3a" />
+
+
 
 This makes the entire pipeline environment-agnostic, avoiding code duplication and enabling CI/CD-friendly deployments.
 
