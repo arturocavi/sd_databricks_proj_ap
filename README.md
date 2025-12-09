@@ -116,6 +116,7 @@ In the task parameter of each python file task you need to write:
 
 This makes the entire pipeline environment-agnostic, avoiding code duplication and enabling CI/CD-friendly deployments.
 
+<img width="1600" height="645" alt="job_dag" src="https://github.com/user-attachments/assets/c0daba85-8178-4973-a542-dd5c0ce92457" />
 
 
 
