@@ -1,0 +1,16 @@
+Certificates Links
+
+All Certs:
+https://credentials.databricks.com/profile/arturocarrillovillarreal/wallet
+
+
+Academy Accreditation - Databricks Fundamentals
+https://credentials.databricks.com/d9141615-08ef-43fe-8dcc-a53f4f62f9cd#acc.QfXMVsor
+
+
+Academy Accreditation - Platform Administrator
+https://credentials.databricks.com/79edb3c9-9c58-4a1a-b75a-acd85b6d938d#acc.Qsf4DMtV
+
+
+Academy Accreditation - Generative AI Fundamentals
+https://credentials.databricks.com/d4d55a7c-9c81-4de8-b730-f9669bc79065#acc.FgWc63Bz
