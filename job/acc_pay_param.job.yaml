@@ -1,0 +1,106 @@
+resources:
+  jobs:
+    acc_pay_param:
+      name: acc_pay_param
+      tasks:
+        - task_key: catalog_schemas_creation
+          notebook_task:
+            notebook_path: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/environment_setup/catalog_schemas_creation_nb
+            base_parameters:
+              catalog_name: ap
+            source: WORKSPACE
+        - task_key: external_locations_creation
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/environment_setup/external_locations_creation.py
+          environment_key: Default
+        - task_key: stage
+          depends_on:
+            - task_key: catalog_schemas_creation
+            - task_key: external_locations_creation
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/staging_ingestion.py
+          environment_key: Default
+        - task_key: bronze__ap_invoices
+          depends_on:
+            - task_key: stage
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/bronze/bronze__ap_invoices.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+        - task_key: silver__ap_invoices
+          depends_on:
+            - task_key: bronze__ap_invoices
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/silver/silver__ap_invoices.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+        - task_key: bronze__gl_control_totals
+          depends_on:
+            - task_key: stage
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/bronze/bronze__gl_control_totals.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+        - task_key: silver__gl_control_totals
+          depends_on:
+            - task_key: bronze__gl_control_totals
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/silver/silver__gl_control_totals.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+        - task_key: gold__variance_ap_gl
+          depends_on:
+            - task_key: silver__ap_invoices
+            - task_key: silver__gl_control_totals
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/gold/gold__variance_ap_gl.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+        - task_key: bronze__suppliers
+          depends_on:
+            - task_key: stage
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/bronze/bronze__suppliers.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+        - task_key: silver__suppliers
+          depends_on:
+            - task_key: bronze__suppliers
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/silver/silver__suppliers.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+        - task_key: gold__ap_inv_sup
+          depends_on:
+            - task_key: silver__ap_invoices
+            - task_key: silver__suppliers
+          spark_python_task:
+            python_file: /Workspace/Users/arturocvsdpf@outlook.com/sd_databricks_proj_ap/etl/gold/gold__ap_inv_sup.py
+            parameters:
+              - --catalog_name
+              - "{{job.parameters.catalog_name}}"
+          environment_key: Default
+      queue:
+        enabled: true
+      parameters:
+        - name: catalog_name
+          default: ap_dev
+      environments:
+        - environment_key: Default
+          spec:
+            environment_version: "4"
+      performance_target: PERFORMANCE_OPTIMIZED
